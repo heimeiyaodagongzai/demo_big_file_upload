@@ -1,9 +1,8 @@
-import { readFileToString, readFileToArrayBuffer } from '../utils/index'
+import { readFileToArrayBuffer } from '../utils/index'
 
 const ctx: Worker = self as any;
 
 ctx.onmessage = async (e) => {
-  console.log(e.data)
-  const res = await readFileToString(e.data)
-  ctx.postMessage(res)
+  const data = await readFileToArrayBuffer(e.data)
+  ctx.postMessage({ data, index: e.data.index })
 }

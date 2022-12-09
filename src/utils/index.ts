@@ -56,7 +56,7 @@ export async function doUploadBigFile(optons: DoUploadBigFileOptions & GetFileSl
   // 切片总数
   const fileSliceTotalNum = Math.ceil(file.size / fileSliceSize)
   // // 切片文件字符串对象
-  // const fileStrMap = new Map<number, string>()
+  // const fileSliceDataMap = new Map<number, string>()
   // // 读取中的索引
   // const fileInReadFileStrMap = new Set()
 
@@ -69,21 +69,11 @@ export async function doUploadBigFile(optons: DoUploadBigFileOptions & GetFileSl
 
   const _fileSliceMD5 = await getFileSliceMD5({ file, ...rest })
 
+  console.log({ _fileSliceMD5 })
+
   if (!needFullFileMD5) { // 生成切片MD5作为文件唯一标识
     
   }
-
-  // console.time('读取文件切片')
-
-  // msg.value = '开始读取文件切片'
-
-  // let strMap: any = await readFileToStringByWorker({ file, fileSliceSize })
-
-  // console.timeEnd('读取文件切片')
-  // msg.value = '读取文件完成'
-  // console.log(strMap.keys())
-  
-  // strMap = null
 
   getBigFileMD5ByWorker({ file, fileSliceSize })
 }
@@ -163,62 +153,6 @@ export function getMD5ByFileString(str: string): Promise<string> {
   })
 }
 
-type ReadFileToStringByWorker = {
-  file: File
-  fileSliceSize: number
-  maxWorkerNum?: number
-}
-
-// export function readFileToStringByWorker(options: ReadFileToStringByWorker): Promise<Map<number, string>> {
-//   const {
-//     file,
-//     fileSliceSize,
-//     maxWorkerNum = 2,
-//   } = options
-
-//    // 切片总数
-//    const fileSliceTotalNum = Math.ceil(file.size / fileSliceSize)
-//    // 切片文件字符串对象
-//    const fileStrMap = new Map<number, string>()
-//    // 读取中的索引
-//    const fileInReadFileStrMap = new Set()
-
-//   const workerMap: { [x: number]: any } = {}
-
-//   return new Promise((resolve) => {
-//     for (let index = 0; index < maxWorkerNum; index++) {
-//       workerMap[index] = {}
-//       const item = workerMap[index]
-//       const worker = new ReadFileWorker()
-//       item.worker = worker
-//       item.index = index
-//       worker.postMessage({ file, start: item.index * fileSliceSize, end: (item.index + 1) * fileSliceSize })
-  
-//       worker.onmessage = (e) => {
-//         fileStrMap.set(item.index, e.data)
-//         fileInReadFileStrMap.delete(item.index)
-//         while (true) {
-//           if (item.index === fileSliceTotalNum - 1) { // 没有待读取的切片了
-//             worker.terminate()
-//             resolve(fileStrMap)
-//             break
-//           }
-//           if (fileStrMap.has(item.index)) {
-//             item.index++
-//           }
-//           if (fileInReadFileStrMap.has(item.index)) {
-//             item.index++
-//           } else {
-//             worker.postMessage({ file, start: item.index * fileSliceSize, end: (item.index + 1) * fileSliceSize })
-//             fileInReadFileStrMap.add(item.index)
-//             break
-//           }
-//         }
-//       }
-//     }
-//   })
-// }
-
 type GetBigFileMD5ByWorkerOptions = {
   file: File
   fileSliceSize: number
@@ -229,25 +163,25 @@ export function getBigFileMD5ByWorker(options: GetBigFileMD5ByWorkerOptions) {
   const {
     file,
     fileSliceSize,
-    maxWorkerNum = 2,
+    maxWorkerNum = 3,
   } = options
 
+  const fileSize = file.size
   // 切片总数
-  const fileSliceTotalNum = Math.ceil(file.size / fileSliceSize)
-  const fileStrMap = new Map<number, string>()
+  const fileSliceTotalNum = Math.ceil(fileSize / fileSliceSize)
+  const fileSliceDataMap = new Map<number, ArrayBuffer>()
   const fileSliceInfo = new Array(fileSliceTotalNum).fill(null).map((v, i) => {
     const start = i * fileSliceSize
-    return { start, end: start > file.size ? file.size : start + fileSliceSize }
+    const end = start + fileSliceSize > fileSize ? fileSize : start + fileSliceSize
+    return { start, end, len: end - start }
   })
   // 切片MD5
   const fileSliceMd5Map = new Map<number, string>()
-  // 读取中的索引
-  const readingFileSliceStrIndexSet = new Set<number>()
 
   // 内存中缓存的最大切片数量
   const maxCacheFileSliceStrNum = maxWorkerNum * 4
   // 缓存可用剩余切片数
-  let reaminCacheFileSliceStrNum = maxCacheFileSliceStrNum
+  let reaminCacheFileSliceNum = maxCacheFileSliceStrNum
   let nextReadFileSliceIndex = 0
 
   // 当前在计算MD5的切片索引
@@ -257,7 +191,6 @@ export function getBigFileMD5ByWorker(options: GetBigFileMD5ByWorkerOptions) {
   const readNextFileSlice = () => {
     let key = '', length = maxCacheFileSliceStrNum
     Object.keys(workerMap).forEach(v => { // 往任务少的worker中分配任务
-      if (!key) key = v
       const len = workerMap[v].readingList.length
       if (len < length) {
         length = len
@@ -266,12 +199,11 @@ export function getBigFileMD5ByWorker(options: GetBigFileMD5ByWorkerOptions) {
     })
     const item = workerMap[key]
 
-    if (reaminCacheFileSliceStrNum && nextReadFileSliceIndex !== fileSliceTotalNum - 1) { // 还能加
-      readingFileSliceStrIndexSet.add(nextReadFileSliceIndex)
+    if (reaminCacheFileSliceNum && nextReadFileSliceIndex !== fileSliceTotalNum) { // 还能加
       item.readingList.push(nextReadFileSliceIndex)
-      reaminCacheFileSliceStrNum--
+      reaminCacheFileSliceNum--
       
-      item.worker.postMessage({ file, ...fileSliceInfo[nextReadFileSliceIndex] })
+      item.worker.postMessage({ file, ...fileSliceInfo[nextReadFileSliceIndex], index: nextReadFileSliceIndex })
       nextReadFileSliceIndex++
       readNextFileSlice()
     }
@@ -283,31 +215,41 @@ export function getBigFileMD5ByWorker(options: GetBigFileMD5ByWorkerOptions) {
     workerMap[i] = { worker, readingList: [] }
     const item = workerMap[i]
     worker.onmessage = ({ data }) => {
-      console.log(`第${item.readingList[0]}片读取完成`);
-      fileStrMap.set(item.readingList[0], data)
+      const index = item.readingList[0]
+      console.log(`第${index}/${fileSliceTotalNum}片读取完成`, fileSliceInfo[index]);
+      fileSliceDataMap.set(index, data.data)
+      if (currentComputedMD5Index <= index) computedNextMD5()
       item.readingList.splice(0, 1)
-      if (!currentComputedMD5Index) computedNextMD5()
     }
   }))
 
   readNextFileSlice()
 
-  console.log(workerMap)
+  console.log({ workerMap, fileSliceInfo, file })
 
   const md5Worker = new MD5Worker()
+
+  const cacheFileSliceList: number[] = []
+
   // 塞下一片的数据
   function computedNextMD5() {
-    md5Worker.postMessage({ type: 'append', str: fileStrMap.get(currentComputedMD5Index) })
-    fileStrMap.delete(currentComputedMD5Index)
-    currentComputedMD5Index++
-    reaminCacheFileSliceStrNum++
-    readNextFileSlice()
+    if (!fileSliceDataMap.has(currentComputedMD5Index)) return console.log('未读取到数据，返回', { currentComputedMD5Index })
+    cacheFileSliceList.push(currentComputedMD5Index)
+    // console.log('MD5Worker.postMessage', { currentComputedMD5Index })
+    // md5Worker.postMessage({ type: 'append', data: fileSliceDataMap.get(currentComputedMD5Index) })
+    if (currentComputedMD5Index === fileSliceTotalNum) return
+    // fileSliceDataMap.delete(currentComputedMD5Index)
+    // currentComputedMD5Index++
+    // reaminCacheFileSliceNum++
+    // readNextFileSlice()
   }
 
   md5Worker.onmessage = ({ data }) => {
+    console.log('MD5Worker.onmessage', data)
     if (data.type === 'next') {
-      msg.value = `MD5计算到第${currentComputedMD5Index + 1}片`
-      if (currentComputedMD5Index === fileSliceTotalNum - 1) {
+      msg.value = `MD5计算完第${currentComputedMD5Index}/${fileSliceTotalNum}片`
+      console.log(msg.value)
+      if (currentComputedMD5Index === fileSliceTotalNum) {
         md5Worker.postMessage({ type: 'end' })
       } else {
         computedNextMD5()
