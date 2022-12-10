@@ -1,8 +1,8 @@
 import { ref } from 'vue'
 import SparkMD5 from 'spark-md5'
 
-import ReadFileWorker from '../worker/readFile?worker'
-import MD5Worker from '../worker/md5?worker'
+import ReadFileWorker from '../worker/readFile?worker&inline'
+import MD5Worker from '../worker/md5?worker&inline'
 
 export const msg = ref('')
 
@@ -44,7 +44,7 @@ export type DoUploadBigFileOptions = {
 export async function doUploadBigFile(optons: DoUploadBigFileOptions & GetFileSliceMD5Options) {
   const {
     file,
-    fileSliceSize = 1024 ** 2 * 4,
+    fileSliceSize = 1024 ** 2 * 2,
     onComputeMD5ProgressChange,
     checkCacheStorgeKey = 'xxx',
     needFullFileMD5 = true,
@@ -76,6 +76,7 @@ export async function doUploadBigFile(optons: DoUploadBigFileOptions & GetFileSl
   }
 
   getBigFileMD5ByWorker({ file, fileSliceSize })
+  // demo(file)
 }
 
 export type GetFileSliceMD5Options = {
@@ -156,14 +157,14 @@ export function getMD5ByFileString(str: string): Promise<string> {
 type GetBigFileMD5ByWorkerOptions = {
   file: File
   fileSliceSize: number
-  maxWorkerNum?: number
+  // maxWorkerNum?: number
 }
 
 export function getBigFileMD5ByWorker(options: GetBigFileMD5ByWorkerOptions) {
   const {
     file,
     fileSliceSize,
-    maxWorkerNum = 3,
+    // maxWorkerNum = 2,
   } = options
 
   const fileSize = file.size
@@ -171,15 +172,16 @@ export function getBigFileMD5ByWorker(options: GetBigFileMD5ByWorkerOptions) {
   const fileSliceTotalNum = Math.ceil(fileSize / fileSliceSize)
   const fileSliceDataMap = new Map<number, ArrayBuffer>()
   const fileSliceInfo = new Array(fileSliceTotalNum).fill(null).map((v, i) => {
-    const start = i * fileSliceSize
-    const end = start + fileSliceSize > fileSize ? fileSize : start + fileSliceSize
-    return { start, end, len: end - start }
+    const start = i * fileSliceSize;
+    const end = start + fileSliceSize > fileSize ? fileSize : start + fileSliceSize;
+    return { start, end }
   })
   // 切片MD5
   const fileSliceMd5Map = new Map<number, string>()
 
   // 内存中缓存的最大切片数量
-  const maxCacheFileSliceStrNum = maxWorkerNum * 4
+  // const maxCacheFileSliceStrNum = maxWorkerNum * 4
+  const maxCacheFileSliceStrNum = 4
   // 缓存可用剩余切片数
   let reaminCacheFileSliceNum = maxCacheFileSliceStrNum
   let nextReadFileSliceIndex = 0
@@ -188,76 +190,133 @@ export function getBigFileMD5ByWorker(options: GetBigFileMD5ByWorkerOptions) {
   let currentComputedMD5Index = 0
 
   // 读下一片的数据
-  const readNextFileSlice = () => {
-    let key = '', length = maxCacheFileSliceStrNum
-    Object.keys(workerMap).forEach(v => { // 往任务少的worker中分配任务
-      const len = workerMap[v].readingList.length
-      if (len < length) {
-        length = len
-        key = v
-      }
-    })
-    const item = workerMap[key]
+  // const readNextFileSlice = () => {
+  //   let key = '', length = maxCacheFileSliceStrNum
+  //   Object.keys(workerMap).forEach(v => { // 往任务少的worker中分配任务，但第一轮执行完之后全都没有任务，只会有第一个worker继续工作，其他的都看戏
+  //     const len = workerMap[v].readingList.length
+  //     if (len < length) {
+  //       length = len
+  //       key = v
+  //     }
+  //   })
+  //   const item = workerMap[key]
 
+  //   if (reaminCacheFileSliceNum && nextReadFileSliceIndex !== fileSliceTotalNum) { // 还能加
+  //     item.readingList.push(nextReadFileSliceIndex)
+  //     reaminCacheFileSliceNum--
+      
+  //     item.worker.postMessage({ ...fileSliceInfo[nextReadFileSliceIndex], index: nextReadFileSliceIndex })
+  //     nextReadFileSliceIndex++
+  //     readNextFileSlice()
+  //   }
+  // }
+  const readNextFileSlice = () => {
     if (reaminCacheFileSliceNum && nextReadFileSliceIndex !== fileSliceTotalNum) { // 还能加
-      item.readingList.push(nextReadFileSliceIndex)
+      readingList.push(nextReadFileSliceIndex)
       reaminCacheFileSliceNum--
       
-      item.worker.postMessage({ file, ...fileSliceInfo[nextReadFileSliceIndex], index: nextReadFileSliceIndex })
+      readFileWorker.postMessage({ ...fileSliceInfo[nextReadFileSliceIndex], index: nextReadFileSliceIndex })
       nextReadFileSliceIndex++
       readNextFileSlice()
     }
   }
 
-  const workerMap: { [x: number | string]: { worker: Worker, readingList: number[] } } = {}
-  ;(new Array(maxWorkerNum).fill(null).forEach((v, i) => {
-    const worker = new ReadFileWorker()
-    workerMap[i] = { worker, readingList: [] }
-    const item = workerMap[i]
-    worker.onmessage = ({ data }) => {
-      const index = item.readingList[0]
-      console.log(`第${index}/${fileSliceTotalNum}片读取完成`, fileSliceInfo[index]);
-      fileSliceDataMap.set(index, data.data)
-      if (currentComputedMD5Index <= index) computedNextMD5()
-      item.readingList.splice(0, 1)
-    }
-  }))
+  // const workerMap: { [x: number | string]: { worker: Worker, readingList: number[] } } = {}
+  // ;(new Array(maxWorkerNum).fill(null).forEach((v, i) => {
+  //   const worker = new ReadFileWorker()
+  //   workerMap[i] = { worker, readingList: [] }
+  //   const item = workerMap[i]
+  //   worker.postMessage({ file })
+  //   worker.onmessage = ({ data }) => {
+  //     const index = item.readingList[0]
+  //     console.log(`第${index + 1}/${fileSliceTotalNum}片读取完成`, { currentComputedMD5Index, index, i });
+  //     fileSliceDataMap.set(index, data.data)
+  //     item.readingList.splice(0, 1)
+  //     doComputedNextMD5()
+  //   }
+  // }))
+
+  /**
+   * 就算是多线程读，读完第一批数据后也要等md5Worker一个一个的消费数据，会导致最终只有一个线程在工作，直接用单线程算了
+   * 从火焰图上看读2mb的数据要3ms，md5Worker消费数据要30ms，只有一个线程读也完全没问题
+   */
+  const readFileWorker = new ReadFileWorker()
+  const readingList: number[] = []
+  readFileWorker.postMessage({ file })
+  readFileWorker.onmessage = ({ data }) => {
+    const index = readingList[0]
+    fileSliceDataMap.set(index, data.data)
+    readingList.splice(0, 1)
+    doComputedNextMD5()
+  }
 
   readNextFileSlice()
 
-  console.log({ workerMap, fileSliceInfo, file })
-
   const md5Worker = new MD5Worker()
 
-  const cacheFileSliceList: number[] = []
+  let isComputingMD5 = false
 
-  // 塞下一片的数据
-  function computedNextMD5() {
-    if (!fileSliceDataMap.has(currentComputedMD5Index)) return console.log('未读取到数据，返回', { currentComputedMD5Index })
-    cacheFileSliceList.push(currentComputedMD5Index)
-    // console.log('MD5Worker.postMessage', { currentComputedMD5Index })
-    // md5Worker.postMessage({ type: 'append', data: fileSliceDataMap.get(currentComputedMD5Index) })
-    if (currentComputedMD5Index === fileSliceTotalNum) return
-    // fileSliceDataMap.delete(currentComputedMD5Index)
-    // currentComputedMD5Index++
-    // reaminCacheFileSliceNum++
-    // readNextFileSlice()
+  function doComputedNextMD5() {
+    if (!fileSliceDataMap.has(currentComputedMD5Index) || isComputingMD5) return
+    // console.log(`开始计算第${currentComputedMD5Index + 1}片`)
+    md5Worker.postMessage({ type: 'append', data: fileSliceDataMap.get(currentComputedMD5Index) })
+    fileSliceDataMap.delete(currentComputedMD5Index)
+    currentComputedMD5Index++
+    reaminCacheFileSliceNum++
+    isComputingMD5 = true
+    readNextFileSlice()
   }
 
   md5Worker.onmessage = ({ data }) => {
-    console.log('MD5Worker.onmessage', data)
+    isComputingMD5 = false
     if (data.type === 'next') {
       msg.value = `MD5计算完第${currentComputedMD5Index}/${fileSliceTotalNum}片`
       console.log(msg.value)
       if (currentComputedMD5Index === fileSliceTotalNum) {
         md5Worker.postMessage({ type: 'end' })
       } else {
-        computedNextMD5()
+        doComputedNextMD5()
       }
     } else if (data.type === 'end') {
       msg.value = `MD5为：${data.md5}`
-      Object.keys(workerMap).forEach(v => workerMap[v].worker.terminate())
+      // Object.keys(workerMap).forEach(v => workerMap[v].worker.terminate())
+      readFileWorker.terminate()
       md5Worker.terminate()
     }
   }
 }
+
+// function demo(file: File) {
+//   var blobSlice = File.prototype.slice,
+//         chunkSize = 2097152,                             // Read in chunks of 2MB
+//         chunks = Math.ceil(file.size / chunkSize),
+//         currentChunk = 0,
+//         spark = new SparkMD5.ArrayBuffer(),
+//         fileReader = new FileReader();
+
+//     fileReader.onload = function (e) {
+//         console.log('read chunk nr', currentChunk + 1, 'of', chunks);
+//         spark.append(e!.target!.result as ArrayBuffer);                   // Append array buffer
+//         currentChunk++;
+
+//         if (currentChunk < chunks) {
+//             loadNext();
+//         } else {
+//             console.log('finished loading');
+//             console.info('computed hash', spark.end());  // Compute hash
+//         }
+//     };
+
+//     fileReader.onerror = function () {
+//         console.warn('oops, something went wrong.');
+//     };
+
+//     function loadNext() {
+//         var start = currentChunk * chunkSize,
+//             end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
+
+//         fileReader.readAsArrayBuffer(blobSlice.call(file, start, end));
+//     }
+
+//     loadNext();
+// }
